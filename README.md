@@ -7,7 +7,7 @@ A working proof-of-concept implementing the [x402](https://x402.org) open paymen
 ## On-chain proof
 
 Real USDT payment (0.01 USDT) settled via x402 flow on TON mainnet:
-[tonviewer.com/transaction/2a70f5d...](https://tonviewer.com/transaction/2a70f5dfef76bdd74193e4710c9583c960321ce82369bfed7db93cb15e6daa88)
+[tonviewer.com/transaction/ba96f62...](https://tonviewer.com/transaction/ba96f62d4ea651a21da4282809f2541ea42481ca35018129f29b406ef3fe36c0)
 
 ## Architecture
 
