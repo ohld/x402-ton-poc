@@ -1,0 +1,35 @@
+{
+  "name": "x402-ton-poc",
+  "version": "0.1.0",
+  "description": "x402 Payment Protocol POC with USDT on TON Blockchain",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "client": "tsx src/client.ts",
+    "test": "tsx src/test.ts"
+  },
+  "keywords": [
+    "x402",
+    "ton",
+    "usdt",
+    "payments",
+    "gasless"
+  ],
+  "author": "Dan Okhlopkov",
+  "license": "MIT",
+  "dependencies": {
+    "@ton-api/client": "^0.4.0",
+    "@ton-api/ton-adapter": "^0.4.1",
+    "@ton/core": "^0.63.1",
+    "@ton/crypto": "^3.3.0",
+    "@ton/ton": "^16.2.2",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.3.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
