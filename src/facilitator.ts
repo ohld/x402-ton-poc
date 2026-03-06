@@ -61,9 +61,9 @@ export class TonFacilitator {
       return { valid: false, error: `Wrong token: expected ${this.config.expectedToken}, got ${tokenMaster}` };
     }
 
-    // Check amount (string comparison for bigint-safe)
-    if (BigInt(amount) < BigInt(this.config.minAmount)) {
-      return { valid: false, error: `Insufficient amount: need ${this.config.minAmount}, got ${amount}` };
+    // Check amount — exact match required per x402 exact scheme
+    if (BigInt(amount) !== BigInt(this.config.minAmount)) {
+      return { valid: false, error: `Amount mismatch: expected ${this.config.minAmount}, got ${amount}` };
     }
 
     // Check signed messages exist

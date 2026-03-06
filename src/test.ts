@@ -111,14 +111,14 @@ function testFacilitatorVerification() {
   const r3 = facilitator.verify(wrongToken);
   assert(r3.valid === false, "Wrong token fails verification");
 
-  // Insufficient amount
-  const lowAmount: TonPaymentPayload = {
+  // Wrong amount (must be exact match)
+  const wrongAmount: TonPaymentPayload = {
     ...validPayload,
     payload: { ...validPayload.payload, amount: "1", nonce: "test-nonce-4" },
   };
-  const r4 = facilitator.verify(lowAmount);
-  assert(r4.valid === false, "Insufficient amount fails verification");
-  assert(r4.error!.includes("Insufficient"), "Error mentions insufficient amount");
+  const r4 = facilitator.verify(wrongAmount);
+  assert(r4.valid === false, "Wrong amount fails verification");
+  assert(r4.error!.includes("mismatch"), "Error mentions amount mismatch");
 
   // Expired payment
   const expired: TonPaymentPayload = {
