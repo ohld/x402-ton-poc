@@ -1,112 +1,93 @@
 # x402-ton-poc
 
-**x402 Payment Protocol + USDT on TON Blockchain**
+Proof-of-concept: paid HTTP API accepting USDT on TON via [x402](https://x402.org) protocol.
 
-A working proof-of-concept implementing the [x402](https://x402.org) open payment standard with TON blockchain. Any HTTP API can accept USDT payments via gasless W5 wallet transactions — the client never needs TON for gas.
+**On-chain proof:** [5 successful mainnet payments](https://tonviewer.com/UQAqn8F5nDx8ZvQut25e33uzcBioLLreha4yYujGdrIuHzXX)
 
-## On-chain proof
+## How it compares
 
-Real USDT payment (0.01 USDT) settled via x402 flow on TON mainnet:
-[tonviewer.com/transaction/ba96f62...](https://tonviewer.com/transaction/ba96f62d4ea651a21da4282809f2541ea42481ca35018129f29b406ef3fe36c0)
+### Server (merchant) — same pattern across all chains
 
-## Architecture
+```typescript
+// === TON ===
+app.use(paymentMiddleware({
+  routes: {
+    "GET /api/data": {
+      accepts: [{ scheme: "exact", network: "tvm:-239", amount: "10000",
+                  payTo: "0:abc...", asset: USDT_MASTER, facilitatorUrl: "https://..." }],
+    },
+  },
+  facilitator,
+}));
 
+// === EVM (for comparison) ===
+app.use(paymentMiddleware({
+  "GET /api/data": { price: "$0.01", network: "eip155:8453", payTo: "0xabc..." },
+}, resourceServer));
+
+// === Solana (for comparison) ===
+app.use(paymentMiddleware({
+  "GET /api/data": { price: "$0.01", network: "solana:5eykt...", payTo: "ABC..." },
+}, resourceServer));
 ```
-Client                          Server                      Gasless Relay
-  |                               |                              |
-  |-- GET /api/wallet ----------->|                              |
-  |<-- 402 + PaymentRequired -----|                              |
-  |                               |                              |
-  |-- GET gasless/estimate -------|------------------------------>|
-  |<-- SignRawParams -------------|-------------------------------|
-  |                               |                              |
-  |-- sign with W5 key           |                              |
-  |                               |                              |
-  |-- GET /api/wallet ----------->|                              |
-  |   + X-PAYMENT header         |                              |
-  |                               |-- verify payload             |
-  |                               |-- POST gasless/send -------->|
-  |                               |<-- settlement result --------|
-  |<-- 200 + wallet data --------|                              |
-```
 
-**How gasless works on TON:**
+### Client (buyer) — zero blockchain calls on all chains
 
-TON Wallet V5 (W5) supports `internal_signed` messages — the user signs a batch of jetton transfers off-chain, and a relay submits them on-chain paying gas. This maps directly to x402's facilitator model:
-
-| x402 concept | TON equivalent |
-|---|---|
-| Facilitator | Gasless relay (e.g. TONAPI) |
-| EIP-3009 `transferWithAuthorization` | W5 `internal_signed` message |
-| Gas sponsorship | Relay wraps in internal msg carrying TON for fees |
+| Step | TON | EVM | Solana |
+|------|-----|-----|--------|
+| 1. Request resource | `fetch(url)` -> 402 | `fetch(url)` -> 402 | `fetch(url)` -> 402 |
+| 2. Get signing data | `POST /prepare` -> seqno, messages | _built-in to SDK_ | _built-in to SDK_ |
+| 3. Sign | `wallet.createTransfer()` | `signTypedData()` | `signTransaction()` |
+| 4. Retry with payment | `fetch(url, {headers})` | `fetch(url, {headers})` | `fetch(url, {headers})` |
+| Blockchain calls by client | **0** | **0** | **0** |
+| Gas paid by | Facilitator (TON) | Facilitator (ETH) | Facilitator (SOL) |
 
 ## Quick start
 
 ```bash
-# Install dependencies
-npm install
-
-# Run tests (30 tests, no wallet needed)
-npm test
-
-# Copy env template
+git clone https://github.com/ohld/x402-ton-poc.git
+cd x402-ton-poc && npm install
 cp .env.example .env
-# Edit .env with your values
+# Set TON_PAYEE_ADDRESS (your wallet, raw format 0:hex...)
 
-# Start the paid API server
+# Terminal 1: server
 npm run dev
 
-# In another terminal — trigger a 402 response
-curl -v http://localhost:4021/api/wallet?address=EQDtFpEwcFAEcRe5mLVh2N6C0x-_hJEM7W61_JLnSF74p4q2
-
-# Run client in demo mode (no wallet)
-npm run client
-
-# Run client with real payment
+# Terminal 2: client (needs TON_WALLET_MNEMONIC with USDT)
 source .env && npm run client
 ```
 
-## Project structure
+## Files
 
 ```
 src/
-  types.ts        — x402 protocol types adapted for TON
-  middleware.ts    — Express middleware (returns 402, verifies payments)
-  facilitator.ts  — Gasless integration (verify + settle via relay)
-  server.ts       — Demo API server (paid TON wallet analytics)
-  client.ts       — Demo client (handles 402, signs W5 payment, resends)
-  test.ts         — 30 unit tests for protocol flow
+├── server.ts       — Express server with payment wall (merchant)
+├── client.ts       — CLI client that pays and gets data (buyer)
+├── middleware.ts    — x402 payment middleware for Express
+├── facilitator.ts  — HTTP client to facilitator /prepare /verify /settle
+└── types.ts        — x402 protocol types and TON constants
 ```
 
-## Environment variables
+## Architecture
 
-| Variable | Required | Description |
-|---|---|---|
-| `TON_PAYEE_ADDRESS` | Yes | Your wallet address (raw format `0:hex...`) |
-| `TONAPI_KEY` | No | TONAPI key for higher rate limits |
-| `TON_WALLET_MNEMONIC` | Client only | 24-word mnemonic for W5 wallet |
-| `PORT` | No | Server port (default: 4021) |
-| `TARGET_ADDRESS` | No | Address to query (client) |
+```
+Client              Server               Facilitator              TON
+  |--- GET /data ---->|                      |                      |
+  |<-- 402 + reqs ----|                      |                      |
+  |--- POST /prepare ---------------------->|                      |
+  |<-- {seqno, msgs} ----------------------|                      |
+  | [sign offline]    |                      |                      |
+  |--- GET /data + payment header --------->|                      |
+  |                   |--- /verify --------->|                      |
+  |                   |--- /settle --------->|--- relay + gas ----->|
+  |                   |<-- tx_hash ----------|<-- confirmed --------|
+  |<-- 200 + data ----|                      |                      |
+```
 
-## What's implemented
-
-- [x] x402 protocol types for TON (PaymentRequired, PaymentPayload, PaymentResponse)
-- [x] Express middleware — returns 402 with payment requirements
-- [x] Facilitator — verifies payment intent + settles via gasless relay
-- [x] Demo server — paid TON wallet analytics endpoint
-- [x] Demo client — full payment flow with W5R1 signing
-- [x] Real on-chain settlement (USDT on TON mainnet)
-- [x] 30 unit tests
+Client and server make **zero blockchain calls**. The facilitator handles seqno lookup, gas sponsorship, and on-chain relay.
 
 ## Related
 
-- [x402 spec PR for TON](https://github.com/coinbase/x402) (pending)
-- [x402 Standard](https://x402.org)
-- [x402 GitHub](https://github.com/coinbase/x402)
-- [W5 Wallet Contract](https://github.com/ton-blockchain/wallet-contract-v5)
-- [TONAPI Gasless API](https://docs.tonconsole.com/tonapi/rest-api/gasless)
-- [TEP-74 Jetton Standard](https://github.com/ton-blockchain/TEPs/blob/master/text/0074-jettons-standard.md)
-
-## License
-
-MIT
+- [x402-ton-facilitator](https://github.com/ohld/x402-ton-facilitator) — Self-relay gas sponsorship service
+- [x402 Protocol](https://github.com/coinbase/x402) — HTTP 402 payment standard
+- [SDK PR #1583](https://github.com/coinbase/x402/pull/1583) — TVM mechanism for official x402 SDKs

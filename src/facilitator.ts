@@ -1,180 +1,137 @@
 /**
- * TON Facilitator — verifies and settles payments via TONAPI Gasless API.
+ * Facilitator HTTP Client — calls the external TON facilitator service.
  *
- * In x402 terms, the facilitator:
- * 1. Verifies that the payment payload is valid (correct amount, recipient, not expired)
- * 2. Settles the payment on-chain (submits the signed W5 message via TONAPI relay)
- *
- * Uses TONAPI's gasless endpoints:
- * - GET  /v2/gasless/config     — supported tokens, relay address
- * - POST /v2/gasless/estimate   — get signing payload + commission estimate
- * - POST /v2/gasless/send       — submit signed W5 message for on-chain settlement
+ * The facilitator handles all blockchain interaction:
+ * - /prepare: returns seqno + messages for client signing
+ * - /verify: validates signed payment BoC
+ * - /settle: relays payment on-chain via self-relay (sponsors gas)
  */
 
-import { TonPaymentPayload, PaymentResponse, USDT_MASTER_MAINNET } from "./types.js";
-
-const TONAPI_BASE = "https://tonapi.io";
+import { TonPaymentPayload, PaymentResponse, PrepareResponse, PaymentOption } from "./types.js";
 
 export interface FacilitatorConfig {
-  /** TONAPI key (optional, increases rate limits) */
-  tonapiKey?: string;
-  /** Expected recipient address (raw format) */
-  expectedPayTo: string;
-  /** Expected token master address */
-  expectedToken: string;
-  /** Minimum payment amount in token units */
-  minAmount: string;
+  /** Base URL of the facilitator service */
+  facilitatorUrl: string;
 }
 
 export class TonFacilitator {
   private config: FacilitatorConfig;
-  private settledNonces = new Set<string>();
+  private verifiedNonces = new Set<string>();
 
   constructor(config: FacilitatorConfig) {
     this.config = config;
   }
 
   /**
-   * Verify a payment payload without settling.
-   * Checks: amount, recipient, token, expiry, replay.
+   * Prepare signing data for a client.
+   * Returns seqno, messages, and validUntil — everything needed to sign.
    */
-  verify(payload: TonPaymentPayload): { valid: boolean; error?: string } {
-    const { to, tokenMaster, amount, validUntil, nonce, signedMessages } = payload.payload;
-
-    // Check replay
-    if (this.settledNonces.has(nonce)) {
-      return { valid: false, error: "Nonce already used (replay)" };
-    }
-
-    // Check expiry
-    if (validUntil < Math.floor(Date.now() / 1000)) {
-      return { valid: false, error: "Payment expired" };
-    }
-
-    // Check recipient
-    if (to !== this.config.expectedPayTo) {
-      return { valid: false, error: `Wrong recipient: expected ${this.config.expectedPayTo}, got ${to}` };
-    }
-
-    // Check token
-    if (tokenMaster !== this.config.expectedToken) {
-      return { valid: false, error: `Wrong token: expected ${this.config.expectedToken}, got ${tokenMaster}` };
-    }
-
-    // Check amount — exact match required per x402 exact scheme
-    if (BigInt(amount) !== BigInt(this.config.minAmount)) {
-      return { valid: false, error: `Amount mismatch: expected ${this.config.minAmount}, got ${amount}` };
-    }
-
-    // Check signed messages exist
-    if (!signedMessages || signedMessages.length === 0) {
-      return { valid: false, error: "No signed messages in payload" };
-    }
-
-    return { valid: true };
-  }
-
-  /**
-   * Settle a payment on-chain via TONAPI gasless/send.
-   * The signed W5 message is submitted to the relay which broadcasts it.
-   */
-  async settle(payload: TonPaymentPayload & { _settlementBoc?: string; _walletPublicKey?: string }): Promise<PaymentResponse> {
-    // First verify
-    const verification = this.verify(payload);
-    if (!verification.valid) {
-      return { success: false, error: verification.error };
-    }
-
-    try {
-      // The client provides the full signed external message BOC
-      // and their public key for TONAPI gasless/send
-      const boc = (payload as any)._settlementBoc;
-      const walletPublicKey = (payload as any)._walletPublicKey;
-
-      if (!boc || !walletPublicKey) {
-        return { success: false, error: "Missing _settlementBoc or _walletPublicKey in payload" };
-      }
-
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (this.config.tonapiKey) {
-        headers["Authorization"] = `Bearer ${this.config.tonapiKey}`;
-      }
-
-      const response = await fetch(`${TONAPI_BASE}/v2/gasless/send`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          wallet_public_key: walletPublicKey,
-          boc: boc,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.text();
-        return { success: false, error: `TONAPI gasless/send: ${response.status} ${error}` };
-      }
-
-      // Mark nonce as used
-      this.settledNonces.add(payload.payload.nonce);
-
-      return {
-        success: true,
-        network: payload.network,
-        txHash: `gasless-${payload.payload.nonce.slice(0, 8)}`,
-      };
-    } catch (err: any) {
-      return { success: false, error: `Settlement failed: ${err.message}` };
-    }
-  }
-
-  /**
-   * Get TONAPI gasless config (supported tokens, relay address).
-   */
-  async getGaslessConfig(): Promise<any> {
-    const headers: Record<string, string> = {};
-    if (this.config.tonapiKey) {
-      headers["Authorization"] = `Bearer ${this.config.tonapiKey}`;
-    }
-
-    const response = await fetch(`${TONAPI_BASE}/v2/gasless/config`, { headers });
-    if (!response.ok) {
-      throw new Error(`TONAPI gasless/config failed: ${response.status}`);
-    }
-    return response.json();
-  }
-
-  /**
-   * Get gasless estimate for a jetton transfer.
-   * Returns SignRawParams that the client needs to sign.
-   */
-  async estimateGasless(
+  async prepare(
     walletAddress: string,
-    jettonMaster: string,
-    messages: Array<{ address: string; amount: string; payload: string }>
-  ): Promise<any> {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-    if (this.config.tonapiKey) {
-      headers["Authorization"] = `Bearer ${this.config.tonapiKey}`;
-    }
-
-    const response = await fetch(`${TONAPI_BASE}/v2/gasless/estimate/${jettonMaster}`, {
+    walletPublicKey: string,
+    paymentRequirements: PaymentOption,
+  ): Promise<PrepareResponse> {
+    const response = await fetch(`${this.config.facilitatorUrl}/prepare`, {
       method: "POST",
-      headers,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        wallet_address: walletAddress,
-        wallet_public_key: "", // Client fills this
-        messages,
+        walletAddress,
+        walletPublicKey,
+        paymentRequirements: {
+          scheme: paymentRequirements.scheme,
+          network: paymentRequirements.network,
+          amount: paymentRequirements.amount,
+          payTo: paymentRequirements.payTo,
+          asset: paymentRequirements.asset,
+        },
       }),
     });
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`TONAPI gasless/estimate failed: ${response.status} ${error}`);
+      throw new Error(`Facilitator /prepare failed: ${response.status} ${error}`);
     }
     return response.json();
+  }
+
+  /**
+   * Verify a payment payload via the facilitator.
+   */
+  async verify(
+    payload: TonPaymentPayload,
+    requirements: PaymentOption,
+  ): Promise<{ valid: boolean; error?: string }> {
+    // Local replay check
+    if (this.verifiedNonces.has(payload.payload.nonce)) {
+      return { valid: false, error: "Nonce already used (replay)" };
+    }
+
+    // Local expiry check
+    if (payload.payload.validUntil < Math.floor(Date.now() / 1000)) {
+      return { valid: false, error: "Payment expired" };
+    }
+
+    const response = await fetch(`${this.config.facilitatorUrl}/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        x402Version: 2,
+        paymentPayload: payload,
+        paymentRequirements: {
+          scheme: requirements.scheme,
+          network: requirements.network,
+          amount: requirements.amount,
+          payTo: requirements.payTo,
+          asset: requirements.asset,
+        },
+      }),
+    });
+
+    const result = await response.json();
+
+    if (result.is_valid) {
+      return { valid: true };
+    }
+    return { valid: false, error: result.invalid_reason || "Verification failed" };
+  }
+
+  /**
+   * Settle a payment on-chain via the facilitator's self-relay.
+   */
+  async settle(
+    payload: TonPaymentPayload,
+    requirements: PaymentOption,
+  ): Promise<PaymentResponse> {
+    const response = await fetch(`${this.config.facilitatorUrl}/settle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        x402Version: 2,
+        paymentPayload: payload,
+        paymentRequirements: {
+          scheme: requirements.scheme,
+          network: requirements.network,
+          amount: requirements.amount,
+          payTo: requirements.payTo,
+          asset: requirements.asset,
+        },
+      }),
+    });
+
+    const result = await response.json();
+
+    if (result.success) {
+      this.verifiedNonces.add(payload.payload.nonce);
+      return {
+        success: true,
+        txHash: result.transaction,
+        network: result.network,
+      };
+    }
+
+    return {
+      success: false,
+      error: result.error_reason || "Settlement failed",
+    };
   }
 }

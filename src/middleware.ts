@@ -3,7 +3,7 @@
  *
  * Intercepts requests to protected routes:
  * - No payment header → returns 402 with PaymentRequired
- * - Has payment header → verifies via TonFacilitator → serves resource or returns error
+ * - Has payment header → verifies + settles via facilitator → serves resource
  */
 
 import type { Request, Response, NextFunction } from "express";
@@ -13,45 +13,35 @@ import {
   TonPaymentPayload,
   PaymentResponse,
   HEADER_PAYMENT_REQUIRED,
-  HEADER_PAYMENT_SIGNATURE,
+  HEADER_PAYMENT,
   HEADER_PAYMENT_RESPONSE,
 } from "./types.js";
 import { TonFacilitator } from "./facilitator.js";
 
 export interface ProtectedRoute {
-  /** Accepted payment options */
   accepts: PaymentOption[];
-  /** Human-readable description of the resource */
   description?: string;
 }
 
 export interface MiddlewareConfig {
-  /** Map of "METHOD /path" -> payment requirements */
   routes: Record<string, ProtectedRoute>;
-  /** TON Facilitator instance */
   facilitator: TonFacilitator;
 }
 
-/**
- * Creates Express middleware that enforces x402 payments on configured routes.
- */
 export function paymentMiddleware(config: MiddlewareConfig) {
   return async (req: Request, res: Response, next: NextFunction) => {
     const routeKey = `${req.method} ${req.path}`;
     const routeConfig = config.routes[routeKey];
 
-    // Not a protected route — pass through
     if (!routeConfig) {
       return next();
     }
 
-    // Check for payment header
-    const paymentHeader = req.headers[HEADER_PAYMENT_SIGNATURE.toLowerCase()] as string | undefined;
+    const paymentHeader = req.headers[HEADER_PAYMENT.toLowerCase()] as string | undefined;
 
     if (!paymentHeader) {
-      // No payment — return 402
       const paymentRequired: PaymentRequired = {
-        x402Version: 1,
+        x402Version: 2,
         accepts: routeConfig.accepts,
         error: "Payment required to access this resource",
       };
@@ -66,7 +56,6 @@ export function paymentMiddleware(config: MiddlewareConfig) {
       return;
     }
 
-    // Parse payment payload
     let payload: TonPaymentPayload;
     try {
       const decoded = Buffer.from(paymentHeader, "base64").toString("utf-8");
@@ -76,37 +65,28 @@ export function paymentMiddleware(config: MiddlewareConfig) {
       return;
     }
 
-    // Verify payment
-    const verification = config.facilitator.verify(payload);
+    const requirements = routeConfig.accepts[0];
+
+    // Verify via facilitator (required)
+    const verification = await config.facilitator.verify(payload, requirements);
     if (!verification.valid) {
-      const response: PaymentResponse = {
-        success: false,
-        error: verification.error,
-      };
+      const response: PaymentResponse = { success: false, error: verification.error };
       const encoded = Buffer.from(JSON.stringify(response)).toString("base64");
       res.setHeader(HEADER_PAYMENT_RESPONSE, encoded);
-      res.status(402).json({
-        error: "Payment verification failed",
-        details: verification.error,
-      });
+      res.status(402).json({ error: "Payment verification failed", details: verification.error });
       return;
     }
 
-    // Settle payment on-chain
-    const settlement = await config.facilitator.settle(payload);
-
+    // Settle via facilitator (self-relay)
+    const settlement = await config.facilitator.settle(payload, requirements);
     const responseEncoded = Buffer.from(JSON.stringify(settlement)).toString("base64");
     res.setHeader(HEADER_PAYMENT_RESPONSE, responseEncoded);
 
     if (!settlement.success) {
-      res.status(402).json({
-        error: "Payment settlement failed",
-        details: settlement.error,
-      });
+      res.status(402).json({ error: "Payment settlement failed", details: settlement.error });
       return;
     }
 
-    // Payment successful — continue to route handler
     next();
   };
 }

@@ -1,45 +1,40 @@
 /**
  * x402 Protocol Types for TON Blockchain
  *
- * Implements the x402 payment standard with TON-specific types.
- * Network ID: "ton:mainnet" (basechain workchain 0)
+ * Self-relay architecture: the facilitator handles all blockchain interaction.
+ * Client signs offline, merchant adds middleware, facilitator sponsors gas.
+ *
+ * Network ID: "tvm:-239" (CAIP-2 format, TON mainnet)
  */
 
 // --- x402 Protocol Headers ---
 
 /** Server -> Client: included with HTTP 402 response */
 export interface PaymentRequired {
-  /** x402 protocol version */
-  x402Version: 1;
-  /** Accepted payment options for this resource */
+  x402Version: 2;
   accepts: PaymentOption[];
-  /** Human-readable error message */
   error?: string;
 }
 
 /** A single accepted payment method */
 export interface PaymentOption {
-  /** Payment scheme identifier */
   scheme: "exact";
-  /** Network identifier (CAIP-2 style) */
   network: string;
-  /** Price in USD (e.g. "$0.01") */
-  price: string;
-  /** Recipient wallet address */
+  /** Amount in token's smallest unit (nano for USDT) */
+  amount: string;
+  /** Recipient wallet address (raw format: 0:hex) */
   payTo: string;
-  /** Token to pay with */
-  token: string;
-  /** Human-readable description */
+  /** Jetton master contract address (raw format: 0:hex) */
+  asset: string;
+  /** Facilitator URL for /prepare, /verify, /settle */
+  facilitatorUrl: string;
   description?: string;
 }
 
-/** Client -> Server: PAYMENT-SIGNATURE header (Base64 JSON) */
+/** Client -> Server: X-PAYMENT header payload */
 export interface TonPaymentPayload {
-  /** Must be "exact" */
   scheme: "exact";
-  /** Must be "ton:mainnet" or "ton:testnet" */
   network: string;
-  /** Payment details */
   payload: {
     /** Sender wallet address (raw format: 0:hex) */
     from: string;
@@ -47,58 +42,48 @@ export interface TonPaymentPayload {
     to: string;
     /** Jetton master contract address (raw format: 0:hex) */
     tokenMaster: string;
-    /** Amount in token's smallest unit (nano for USDT = 6 decimals) */
+    /** Amount in token's smallest unit */
     amount: string;
     /** Valid until unix timestamp */
     validUntil: number;
     /** Random nonce for replay protection */
     nonce: string;
-    /**
-     * Signed messages for W5 wallet (from TONAPI gasless/estimate).
-     * This is the SignRawParams that the client signs with their W5 wallet.
-     */
-    signedMessages: SignedW5Message[];
-    /** Commission amount in token units (paid to relay) */
-    commission: string;
+    /** Signed W5 external message BoC (base64, contains internal_signed body) */
+    settlementBoc: string;
+    /** Sender's Ed25519 public key (hex) */
+    walletPublicKey: string;
   };
 }
 
-/** A signed W5 internal message (from TONAPI gasless flow) */
-export interface SignedW5Message {
-  /** Destination address */
-  address: string;
-  /** Amount in nanoTON (usually "0" for jetton transfers) */
-  amount: string;
-  /** Payload as base64 BOC */
-  payload: string;
-  /** State init as base64 BOC (optional) */
-  stateInit?: string;
+/** Server -> Client: X-PAYMENT-RESPONSE header */
+export interface PaymentResponse {
+  success: boolean;
+  txHash?: string;
+  network?: string;
+  error?: string;
 }
 
-/** Server -> Client: PAYMENT-RESPONSE header */
-export interface PaymentResponse {
-  /** Whether payment was successful */
-  success: boolean;
-  /** Transaction hash on TON (if settled) */
-  txHash?: string;
-  /** Network used */
-  network?: string;
-  /** Error message if failed */
-  error?: string;
+/** Response from facilitator /prepare endpoint */
+export interface PrepareResponse {
+  seqno: number;
+  validUntil: number;
+  walletId: number;
+  messages: Array<{
+    address: string;
+    amount: string;
+    payload: string;
+  }>;
 }
 
 // --- TON-specific constants ---
 
-export const TON_MAINNET = "ton:mainnet";
-export const TON_TESTNET = "ton:testnet";
+export const TVM_MAINNET = "tvm:-239";
+export const TVM_TESTNET = "tvm:-3";
 
 /** USDT Jetton Master on TON mainnet */
-export const USDT_MASTER_MAINNET = "0:b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe";
-
-/** USDT Jetton Master on TON testnet */
-export const USDT_MASTER_TESTNET = "0:b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe";
+export const USDT_MASTER = "0:b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe";
 
 // --- Header names ---
 export const HEADER_PAYMENT_REQUIRED = "X-PAYMENT-REQUIRED";
-export const HEADER_PAYMENT_SIGNATURE = "X-PAYMENT";
+export const HEADER_PAYMENT = "X-PAYMENT";
 export const HEADER_PAYMENT_RESPONSE = "X-PAYMENT-RESPONSE";
