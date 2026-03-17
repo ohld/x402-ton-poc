@@ -1,7 +1,7 @@
 {
   "name": "x402-ton-poc",
-  "version": "0.1.0",
-  "description": "x402 Payment Protocol POC with USDT on TON Blockchain",
+  "version": "0.2.0",
+  "description": "x402 Payment Protocol POC with USDT on TON — using @x402/tvm SDK",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
@@ -21,6 +21,11 @@
     "@ton/core": "^0.63.1",
     "@ton/crypto": "^3.3.0",
     "@ton/ton": "^16.2.2",
+    "@x402/core": "file:../x402/typescript/packages/core",
+    "@x402/express": "file:../x402/typescript/packages/http/express",
+    "@x402/fetch": "file:../x402/typescript/packages/http/fetch",
+    "@x402/tvm": "file:../x402/typescript/packages/mechanisms/tvm",
+    "dotenv": "^16.4.5",
     "express": "^5.2.1"
   },
   "devDependencies": {
