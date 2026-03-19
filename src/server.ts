@@ -38,7 +38,7 @@ app.use(
           price: "$0.01",
           network: "tvm:-239",
           payTo: PAYEE_ADDRESS,
-          extra: { facilitatorUrl: FACILITATOR_URL },
+          extra: { facilitatorUrl: FACILITATOR_URL, areFeesSponsored: true },
         }],
         description: "Paid weather data",
         mimeType: "application/json",
