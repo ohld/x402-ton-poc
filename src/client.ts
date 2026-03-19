@@ -28,7 +28,10 @@ async function main() {
   const signer = toClientTvmSigner(keyPair);
 
   const client = new x402Client();
-  client.register("tvm:*", new ExactTvmScheme(signer));
+  client.register("tvm:*", new ExactTvmScheme(signer, {
+    rpcUrl: process.env.TON_RPC_URL,     // default: toncenter.com free tier
+    apiKey: process.env.TON_RPC_API_KEY,  // optional, for higher rate limits
+  }));
 
   const fetchWithPayment = wrapFetchWithPayment(fetch, client);
 
