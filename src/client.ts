@@ -12,6 +12,7 @@ import { wrapFetchWithPayment, x402Client, x402HTTPClient } from "@x402/fetch";
 import { ExactTvmScheme } from "@x402/tvm/exact/client";
 import { toClientTvmSigner } from "@x402/tvm";
 import { mnemonicToPrivateKey } from "@ton/crypto";
+import { getHttpEndpoint } from "@orbs-network/ton-access";
 
 config();
 
@@ -27,10 +28,13 @@ async function main() {
   const keyPair = await mnemonicToPrivateKey(mnemonic.split(" "));
   const signer = toClientTvmSigner(keyPair);
 
+  // Use ton-access for free, rate-limit-free RPC endpoint
+  const rpcUrl = process.env.TON_RPC_URL || await getHttpEndpoint();
+
   const client = new x402Client();
   client.register("tvm:*", new ExactTvmScheme(signer, {
-    rpcUrl: process.env.TON_RPC_URL,     // default: toncenter.com free tier
-    apiKey: process.env.TON_RPC_API_KEY,  // optional, for higher rate limits
+    rpcUrl,
+    apiKey: process.env.TON_RPC_API_KEY,
   }));
 
   const fetchWithPayment = wrapFetchWithPayment(fetch, client);
